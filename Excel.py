@@ -40,4 +40,3 @@ while current_rows < MAX_ROWS:
 
     current_rows += 1
     time.sleep(1)
-

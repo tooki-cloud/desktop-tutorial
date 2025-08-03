@@ -30,7 +30,6 @@ def run_prediction_loop():
 
                 # 逸脱確率予測
                 prob = model.predict_proba(X_input)[0][1]
-                print(f" [予測] この状態で10行以内に逸脱する確率: {prob:.4f}")
 
                 with open("latest_prob.json", "w", encoding="utf-8") as f:
                     f.write(f'{{"prob": {prob:.4f}}}')

@@ -9,6 +9,7 @@ import time
 import os
 import json
 import streamlit.components.v1 as components
+import subprocess
 
 st.markdown("""
     <style>
@@ -162,13 +163,42 @@ def highlight_out_of_control_rows(df, group_size, alerts):
 
 
 # ファイルパスと設定
-CSV_FILE_PATH = "データ.csv"  # ご自身のファイル名に合わせてください
+CSV_FILE_PATH = "データ.csv" 
 GROUP_SIZE = 5  # 5個で1群
 UPDATE_INTERVAL = 3  # 秒ごとに更新
+
 
 # ヘッダー
 st.title("💊 リアルタイム測定データ表示")
 st.write(f"更新間隔: {UPDATE_INTERVAL} 秒")
+
+# --- データ生成用ボタン（Excel.py を並列実行） ---
+if "start_time" in st.session_state:
+    elapsed = time.time() - st.session_state["start_time"]
+    if elapsed < 5:
+        st.info(f"⏳ データ生成中… 自動更新まで {int(5 - elapsed)} 秒")
+        time.sleep(1)
+        st.rerun()
+    else:
+        del st.session_state["start_time"]  # 一度だけ実行するため削除
+
+if st.button("▶️ Excel.py をバックグラウンドで起動（1秒ずつ生成開始）"):
+    try:
+        subprocess.Popen(["python", "Excel.py"])
+        st.success("✅ Excel.py を並列実行しました（1秒ずつデータが追加されていきます）")
+
+        # タイムスタンプをセッションに記録（ここが重要！）
+        st.session_state["start_time"] = time.time()
+        st.write("✅ start_time 記録しました")
+    except Exception as e:
+        st.error(f"❌ 実行に失敗しました: {e}")
+
+st.markdown("""
+<div style='color:red; font-weight:bold; font-size:16px; margin-top:10px;'>
+⚠ ボタンを押した後 <u>10秒以上待ってから画面を更新</u> してください。<br>
+生成には少し時間がかかります。
+</div>
+""", unsafe_allow_html=True)
 
 # CSV読み込み
 @st.cache_data(ttl=1)  # 1秒ごとにキャッシュを更新
@@ -353,10 +383,41 @@ if not new_deviation_rows.empty:
 if not st.session_state.deviation_history.empty:
     st.markdown('<div class="section-header">過去の逸脱データ（累積）</div>', unsafe_allow_html=True)
     st.dataframe(st.session_state.deviation_history.reset_index(drop=True), use_container_width=True)
+# 逸脱履歴のコピーを作成
+df_to_download = st.session_state.deviation_history.copy()
 
-time.sleep(UPDATE_INTERVAL)
-st.rerun()
+# 1行目を削除（インデックス0の行）
+df_to_download = df_to_download.iloc[1:].reset_index(drop=True)
 
+# 列名を再設定（列の順番がずれていないことが前提）
+df_to_download.columns = ["時刻", "規格値", "pH", "溶出時間", "作業員ID", "温度", "湿度", "ロット番号"]
+
+# Excel形式に変換
+excel_bytes = io.BytesIO()
+with pd.ExcelWriter(excel_bytes, engine='xlsxwriter') as writer:
+    df_to_download.to_excel(writer, index=False, sheet_name='逸脱データ')
+excel_bytes.seek(0)
+
+# ダウンロードボタンの表示
+st.download_button(
+    label="📥 逸脱データをExcel形式でダウンロード",
+    data=excel_bytes,
+    file_name="逸脱データ.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
+if "start_time" in st.session_state:
+    elapsed = time.time() - st.session_state["start_time"]
+    if elapsed < 5:
+        st.info(f"⏳ 自動更新まで {int(5 - elapsed)} 秒")
+        time.sleep(1)
+        st.rerun()
+    else:
+        del st.session_state["start_time"]
+else:
+    # ✅ 通常時は一定間隔で更新し続ける（必要なら）
+    time.sleep(UPDATE_INTERVAL)
+    st.rerun()
 
 
 
