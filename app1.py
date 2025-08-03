@@ -9,19 +9,41 @@ import time
 import os
 import json
 import streamlit.components.v1 as components
-import subprocess
-
 import threading
-from Excel2 import run_prediction_loop  # ← Excel.pyで定義した関数
+import random
+from datetime import datetime
+import threading
 
-# データ生成スレッドを一度だけ起動
-if st.button("▶️ データ生成をバックグラウンドで開始"):
-    if "thread_started" not in st.session_state:
-        threading.Thread(target=run_prediction_loop, daemon=True).start()
-        st.session_state.thread_started = True
-        st.success("✅ データ生成スレッドを開始しました！")
-    else:
-        st.info("✅ すでにデータ生成中です。")
+def run_prediction_loop():
+    FILE_NAME = "データ.csv"
+    MAX_ROWS = 1000
+
+    if not os.path.exists(FILE_NAME):
+        with open(FILE_NAME, mode="w", encoding="utf-8", newline="") as f:
+            f.write("時刻|規格値|pH|溶出時間|作業員ID|温度|湿度|ロット番号\n")
+
+    with open(FILE_NAME, mode="r", encoding="utf-8") as f:
+        current_rows = sum(1 for _ in f) - 1
+
+    while current_rows < MAX_ROWS:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # 📌 変動幅を拡大（逸脱しやすく）
+        value = round(49.50 + random.uniform(-0.4, 0.4), 2)       # 規格値（平均49.5 ±0.4）
+        pH = round(6.80 + random.uniform(-0.10, 0.10), 2)          # pH（±0.10）
+        time_ = round(82.0 + random.uniform(-0.6, 0.6), 2)         # 溶出時間（±0.6）
+
+        worker = random.choice(["A01", "B02", "C03"])
+        temp = round(25.0 + random.uniform(-0.5, 0.5), 2)          # 温度（±0.5）
+        humid = round(60.0 + random.uniform(-2, 2), 2)             # 湿度（±2）
+        lot = f"LT{random.randint(1000, 9999)}"
+
+        with open(FILE_NAME, mode="a", encoding="utf-8", newline="") as f:
+            f.write(f"{now}|{value}|{pH}|{time_}|{worker}|{temp}|{humid}|{lot}\n")
+
+        current_rows += 1
+        time.sleep(1)
+
         
 st.markdown("""
     <style>
@@ -149,6 +171,7 @@ with st.sidebar:
     st.markdown('<div class="sidebar-item">👤 UserName</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
+
 def check_out_of_control(xbars, Rs, Ss, x_UCL, x_LCL, r_UCL, r_LCL, s_UCL, s_LCL):
     alert_flags = []
     for i in range(len(xbars)):
@@ -173,6 +196,43 @@ def highlight_out_of_control_rows(df, group_size, alerts):
         flags.append(highlight_row(flag))
     return pd.DataFrame(flags, index=df.index, columns=df.columns)
 
+import pandas as pd
+import os
+import time
+from sklearn.ensemble import RandomForestClassifier
+
+def AI_Simulator():
+
+    # モデル学習
+    X_train = pd.read_csv("X_future_deviation.csv")
+    y_train = pd.read_csv("y_future_deviation.csv").values.ravel()
+    model = RandomForestClassifier(n_estimators=100, max_depth=3, random_state=42)
+    model.fit(X_train, y_train)
+
+    # 監視ファイル
+    CSV_FILE = "データ.csv"
+
+    while True:
+        try:
+            if os.path.exists(CSV_FILE):
+                df = pd.read_csv(CSV_FILE, sep="|", encoding="utf-8")
+                df.columns = ["時刻", "規格値", "pH", "溶出時間", "作業員ID", "温度", "湿度", "ロット番号"]
+
+                if len(df) >= 5:
+                    latest_row = df.tail(1).drop(columns=["時刻"])
+                    latest_encoded = pd.get_dummies(latest_row, columns=["作業員ID", "ロット番号"])
+                    X_input = latest_encoded.reindex(columns=X_train.columns, fill_value=0)
+
+                    prob = model.predict_proba(X_input)[0][1]
+
+                    with open("latest_prob.json", "w", encoding="utf-8") as f:
+                        json.dump({"prob": round(prob, 4)}, f)
+
+        except Exception as e:
+            print(f"[AI_Simulatorエラー] {e}")
+
+        time.sleep(1)
+
 
 # ファイルパスと設定
 CSV_FILE_PATH = "データ.csv" 
@@ -184,6 +244,20 @@ UPDATE_INTERVAL = 3  # 秒ごとに更新
 st.title("💊 リアルタイム測定データ表示")
 st.write(f"更新間隔: {UPDATE_INTERVAL} 秒")
 
+#データ生成スレッドを一度だけ起動
+if st.button("▶️ データ生成をバックグラウンドで開始"):
+    if "thread_started" not in st.session_state:
+        threading.Thread(target=run_prediction_loop, daemon=True).start()
+        st.session_state.thread_started = True
+        st.success("✅ データ生成スレッドを開始しました！")
+    else:
+        st.info("✅ すでにデータ生成中です。")
+
+    if "ai_thread_started" not in st.session_state:
+        threading.Thread(target=AI_Simulator, daemon=True).start()
+        st.session_state.ai_thread_started = True
+        st.success("✅ AIによる逸脱確率予測を開始しました！")
+
 # --- データ生成用ボタン（Excel.py を並列実行） ---
 if "start_time" in st.session_state:
     elapsed = time.time() - st.session_state["start_time"]
@@ -193,17 +267,6 @@ if "start_time" in st.session_state:
         st.rerun()
     else:
         del st.session_state["start_time"]  # 一度だけ実行するため削除
-
-if st.button("▶️ Excel.py をバックグラウンドで起動（1秒ずつ生成開始）"):
-    try:
-        subprocess.Popen(["python", "Excel.py"])
-        st.success("✅ Excel.py を並列実行しました（1秒ずつデータが追加されていきます）")
-
-        # タイムスタンプをセッションに記録（ここが重要！）
-        st.session_state["start_time"] = time.time()
-        st.write("✅ start_time 記録しました")
-    except Exception as e:
-        st.error(f"❌ 実行に失敗しました: {e}")
 
 st.markdown("""
 <div style='color:red; font-weight:bold; font-size:16px; margin-top:10px;'>
@@ -281,8 +344,9 @@ ax2.set_xlabel("群番号", fontsize=8)
 ax2.set_ylabel("範囲", fontsize=8)
 ax2.tick_params(labelsize=7)
 ax2.legend(fontsize=7)
-ax2.set_ylim(0, 0.3) 
+ax2.set_ylim(0, max(UCL_R * 1.1, max(group_ranges) * 1.1)) 
 fig_r.tight_layout()
+ # Y軸固定
 
 # ----------- S管理図 ------------
 S_bar = sum(group_stds) / len(group_stds)
@@ -300,7 +364,7 @@ ax3.set_xlabel("群番号", fontsize=8)
 ax3.set_ylabel("標準偏差", fontsize=8)
 ax3.tick_params(labelsize=7)
 ax3.legend(fontsize=7)
-ax3.set_ylim(0, 0.15)
+ax3.set_ylim(0, max(UCL_S * 1.1, max(group_stds) * 1.1))  # Y軸固定
 fig_s.tight_layout()
 
 # ----------- Streamlit 表示 ------------
