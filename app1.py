@@ -11,6 +11,18 @@ import json
 import streamlit.components.v1 as components
 import subprocess
 
+import threading
+from Excel2 import run_prediction_loop  # ← Excel.pyで定義した関数
+
+# データ生成スレッドを一度だけ起動
+if st.button("▶️ データ生成をバックグラウンドで開始"):
+    if "thread_started" not in st.session_state:
+        threading.Thread(target=run_prediction_loop, daemon=True).start()
+        st.session_state.thread_started = True
+        st.success("✅ データ生成スレッドを開始しました！")
+    else:
+        st.info("✅ すでにデータ生成中です。")
+        
 st.markdown("""
     <style>
     .section-header {
